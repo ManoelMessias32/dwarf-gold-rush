@@ -16,7 +16,6 @@ local.properties
 
 # Android Studio profiling data
 captures/
-.cxx/
 
 # Generated files
 .DS_Store
