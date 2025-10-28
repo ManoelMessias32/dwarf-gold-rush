@@ -1,0 +1,159 @@
+.App {
+  text-align: center;
+  padding: 20px;
+  background: #2c1810;
+  color: white;
+  min-height: 100vh;
+}
+
+h1 {
+  color: #ffd700;
+  font-size: 24px;
+}
+
+.stats {
+  background: #4a2c0b;
+  padding: 15px;
+  margin: 20px 0;
+  border-radius: 10px;
+}
+
+.mine-btn {
+  background: #ffd700;
+  color: black;
+  font-size: 20px;
+  padding: 15px 30px;
+  border: none;
+  border-radius: 10px;
+  margin: 10px;
+}
+
+.claim-btn {
+  background: #00ff00;
+  color: black;
+  font-size: 18px;
+  padding: 12px 24px;
+}
+
+.ads {
+  margin-top: 20px;
+}
+
+@keyframes hammerHit {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.95) rotate(-5deg); }
+  100% { transform: scale(1); }
+}
+
+.mine-btn:active {
+  animation: hammerHit 0.2s ease;
+}
+
+@keyframes nuggetPop {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); }
+}
+
+.nugget-count {
+  display: inline-block;
+  animation: nuggetPop 0.4s ease;
+}
+.mute-btn {
+  background: #333;
+  color: #fff;
+  border: 1px solid #888;
+  padding: 10px 20px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.mute-btn:hover {
+  background: #444;
+}
+.ui-buttons {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  gap: 10px;
+}
+
+.rules-btn {
+  background-color: #f4d35e;
+  border: none;
+  border-radius: 5px;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 18px;
+}
+.barra-progresso {
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.barra-progresso progress {
+  width: 100%;
+  height: 20px;
+}
+.contador-regressivo {
+  font-size: 16px;
+  margin-top: 5px;
+  color: #333;
+}
+.barra-container {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-top: 10px;
+}
+
+.recarregar-btn {
+  background-color: #4caf50;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.ad-btn {
+  background-color: #f4d35e;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 5px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.ad-btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+.barra-anuncios {
+  margin-top: 20px;
+  font-size: 16px;
+  color: #fff;
+  text-align: left;
+}
+
+.barra-anuncios label {
+  font-weight: bold;
+  margin-bottom: 5px;
+  display: block;
+}
+
+.barra-visual {
+  width: 100%;
+  height: 20px;
+  background-color: #d4af37; /* dourado */
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: inset 0 0 5px #000;
+}
+
+.barra-preenchida {
+  height: 100%;
+  background-color: #4caf50; /* verde */
+  transition: width 0.5s ease-in-out;
+}

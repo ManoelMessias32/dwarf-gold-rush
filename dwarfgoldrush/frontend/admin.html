@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Painel de Recompensas</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #f4f4f4;
+      margin: 0;
+    }
+
+    h1 {
+      color: #333;
+      font-size: 1.5em;
+      margin-bottom: 10px;
+    }
+
+    button {
+      padding: 10px 15px;
+      font-size: 1em;
+      background-color: #0078D4;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background-color: #005fa3;
+    }
+
+    #resumo {
+      margin-top: 10px;
+      font-weight: bold;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+      font-size: 0.9em;
+    }
+
+    th, td {
+      padding: 8px 10px;
+      border: 1px solid #ccc;
+      text-align: left;
+    }
+
+    th {
+      background-color: #eee;
+    }
+
+    .ativo {
+      background-color: #d4f8d4;
+    }
+
+    @media screen and (max-width: 600px) {
+      table, thead, tbody, th, td, tr {
+        display: block;
+      }
+
+      thead {
+        display: none;
+      }
+
+      tr {
+        margin-bottom: 15px;
+        background: white;
+        border-radius: 5px;
+        box-shadow: 0 0 5px rgba(0,0,0,0.1);
+        padding: 10px;
+      }
+
+      td {
+        border: none;
+        padding: 5px 0;
+        position: relative;
+      }
+
+      td::before {
+        content: attr(data-label);
+        font-weight: bold;
+        display: block;
+        margin-bottom: 3px;
+        color: #555;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Painel de Recompensas</h1>
+  <button onclick="carregarRelatorio()">🔄 Atualizar Relatório</button>
+  <p id="resumo"></p>
+  <table id="tabela">
+    <thead>
+      <tr>
+        <th>Telegram ID</th>
+        <th>Username</th>
+        <th>Nuggets</th>
+        <th>Total Minerado</th>
+        <th>Ecopacts</th>
+        <th>Última Mineração</th>
+        <th>Último Anúncio</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    async function carregarRelatorio() {
+      const res = await fetch('http://localhost:3002/relatorio');
+      const data = await res.json();
+      document.getElementById('resumo').innerText =
+        `Total de usuários: ${data.totalUsuarios} | Ativos: ${data.ativos}`;
+
+      const tbody = document.querySelector('#tabela tbody');
+      tbody.innerHTML = '';
+
+      const limite = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+      data.lista.forEach(user => {
+        const ativo = user.last_mine > limite || user.last_ad_check > limite;
+        const tr = document.createElement('tr');
+        if (ativo) tr.classList.add('ativo');
+
+        tr.innerHTML = `
+          <td data-label="Telegram ID">${user.telegram_id}</td>
+          <td data-label="Username">${user.username || '-'}</td>
+          <td data-label="Nuggets">${user.nuggets}</td>
+          <td data-label="Total Minerado">${user.total_mined}</td>
+          <td data-label="Ecopacts">${user.ecopact_claimed}</td>
+          <td data-label="Última Mineração">${new Date(user.last_mine).toLocaleDateString()}</td>
+          <td data-label="Último Anúncio">${new Date(user.last_ad_check).toLocaleDateString()}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    carregarRelatorio();
+  </script>
+</body>
+</html>
+

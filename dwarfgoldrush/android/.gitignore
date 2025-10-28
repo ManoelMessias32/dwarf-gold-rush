@@ -1,0 +1,22 @@
+# Gradle files
+.gradle
+build/
+
+# Local configuration files
+.idea/
+.cxx/
+local.properties
+
+# Keystore files
+*.jks
+*.keystore
+
+# Log files
+*.log
+
+# Android Studio profiling data
+captures/
+.cxx/
+
+# Generated files
+.DS_Store

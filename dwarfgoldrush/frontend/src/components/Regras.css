@@ -1,0 +1,28 @@
+.regras-container {
+  background-color: #1e1e1e;
+  color: #f0f0f0;
+  padding: 20px;
+  border-radius: 12px;
+  max-width: 600px;
+  margin: 20px auto;
+  font-family: 'Segoe UI', sans-serif;
+}
+
+.regras-container h2 {
+  margin-bottom: 10px;
+  color: #ffd700;
+}
+
+.regras-container h3 {
+  margin-top: 20px;
+  color: #00ffd5;
+}
+
+.regras-container ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.regras-container li {
+  margin-bottom: 8px;
+}
