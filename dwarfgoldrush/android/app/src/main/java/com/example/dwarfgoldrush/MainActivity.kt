@@ -1,49 +1,37 @@
 package com.example.dwarfgoldrush
 
+import android.annotation.SuppressLint
 import android.os.Bundle
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 
 class MainActivity : ComponentActivity() {
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            DwarfGoldRushTheme {
-                // A surface container using the 'background' color from the theme
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Greeting("Android")
-                }
-            }
-        }
-    }
-}
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
+        // Enable remote debugging
+        WebView.setWebContentsDebuggingEnabled(true)
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    DwarfGoldRushTheme {
-        Greeting("Android")
-    }
-}
+        val myWebView = WebView(this)
 
-@Composable
-fun DwarfGoldRushTheme(content: @Composable () -> Unit) {
-    MaterialTheme {
-        content()
+        // Configure WebView settings
+        myWebView.settings.javaScriptEnabled = true // Enable JavaScript
+        myWebView.settings.domStorageEnabled = true    // Enable local storage
+        myWebView.settings.allowFileAccess = true      // Allow access to local files
+        myWebView.settings.allowContentAccess = true   // Allow content access
+        myWebView.settings.allowFileAccessFromFileURLs = true // Allow access from file URLs
+        myWebView.settings.allowUniversalAccessFromFileURLs = true // Allow universal access from file URLs
+        myWebView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+
+        // Set a WebViewClient to handle page navigation within the WebView
+        myWebView.webViewClient = WebViewClient()
+
+        // Load the game's index.html file from the root of the assets folder
+        myWebView.loadUrl("file:///android_asset/frontend/index.html")
+
+        setContentView(myWebView)
     }
 }
