@@ -59,7 +59,10 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("io.coil-kt:coil-compose:2.5.0")
     implementation("io.coil-kt:coil-gif:2.5.0")
-    implementation("com.google.android.gms:play-services-ads:23.0.0") // AdMob Library
+    implementation("com.google.android.gms:play-services-ads:23.0.0")
+    implementation("com.google.accompanist:accompanist-pager:0.28.0") // Pager library
+    implementation("com.google.accompanist:accompanist-pager-indicators:0.28.0") // Pager indicators
+
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
