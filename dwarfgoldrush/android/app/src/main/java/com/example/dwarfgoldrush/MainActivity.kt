@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,9 +23,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,7 +56,6 @@ val MAX_MINING_TIME_MS = TimeUnit.HOURS.toMillis(12)
 val MINING_TIME_PER_AD_MS = MAX_MINING_TIME_MS / 20
 val COOLDOWN_DURATION_MS = TimeUnit.HOURS.toMillis(4)
 const val NUGGETS_GOAL = 10000L
-const val NUGGET_GAIN_INTERVAL_SECONDS = 20
 
 // --- Data Classes ---
 data class GameState(val miningTimeRemainingMs: Long, val cooldownStartedAt: Long, val nuggets: Long, val upgrades: Set<String>)
@@ -150,10 +153,16 @@ fun InitialScreen(navController: NavController) {
 @Composable
 fun LoginScreen(navController: NavController) {
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     var name by remember { mutableStateOf("") }
     var surname by remember { mutableStateOf("") }
     var walletAddress by remember { mutableStateOf("") }
     var referralCode by remember { mutableStateOf("") }
+    var agreedToPrivacy by remember { mutableStateOf(false) }
+    var agreedToTerms by remember { mutableStateOf(false) }
+
+    val privacyPolicyUrl = "https://manoelmessias32.github.io/dwarf-gold-rush/privacy-policy.html"
+    val termsOfServiceUrl = "https://manoelmessias32.github.io/dwarf-gold-rush/terms-of-service.html"
     
     val textFieldColors = OutlinedTextFieldDefaults.colors(
         focusedBorderColor = Color.White,
@@ -173,21 +182,46 @@ fun LoginScreen(navController: NavController) {
                 OutlinedTextField(value = walletAddress, onValueChange = { walletAddress = it }, label = { Text("Endereço da Wallet") }, colors = textFieldColors, textStyle = TextStyle(color = MaterialTheme.colorScheme.primary))
                 OutlinedTextField(value = referralCode, onValueChange = { referralCode = it }, label = { Text("Código de Referência (Opcional)") }, colors = textFieldColors, textStyle = TextStyle(color = MaterialTheme.colorScheme.primary))
             }
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Column(horizontalAlignment = Alignment.Start) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = agreedToPrivacy, onCheckedChange = { agreedToPrivacy = it })
+                    ClickableText(
+                        text = AnnotatedString("Eu li e aceito a Política de Privacidade"),
+                        style = TextStyle(color = Color.White, textDecoration = TextDecoration.Underline),
+                        onClick = { uriHandler.openUri(privacyPolicyUrl) }
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = agreedToTerms, onCheckedChange = { agreedToTerms = it })
+                    ClickableText(
+                        text = AnnotatedString("Eu li e aceito os Termos de Serviço"),
+                        style = TextStyle(color = Color.White, textDecoration = TextDecoration.Underline),
+                        onClick = { uriHandler.openUri(termsOfServiceUrl) }
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = {
-                if (name.lowercase() == "admin") {
-                    navController.navigate(AppRoutes.ADMIN)
-                    return@Button
-                }
-                if (name.isNotBlank() && walletAddress.isNotBlank()) {
-                    val profile = UserProfile(name = "$name $surname", walletAddress = walletAddress, isLoggedIn = true)
-                    saveUserProfile(context, profile)
-                    if (referralCode.isNotBlank()) incrementReferralCount(context, referralCode)
-                    navController.navigate(AppRoutes.MAIN) { popUpTo(AppRoutes.INITIAL) { inclusive = true } }
-                } else {
-                    Toast.makeText(context, "Preencha o nome e a carteira!", Toast.LENGTH_SHORT).show()
-                }
-            }) { Text("Entrar") }
+            
+            Button(
+                onClick = {
+                    if (name.lowercase() == "admin") {
+                        navController.navigate(AppRoutes.ADMIN)
+                        return@Button
+                    }
+                    if (name.isNotBlank() && walletAddress.isNotBlank()) {
+                        val profile = UserProfile(name = "$name $surname", walletAddress = walletAddress, isLoggedIn = true)
+                        saveUserProfile(context, profile)
+                        if (referralCode.isNotBlank()) incrementReferralCount(context, referralCode)
+                        navController.navigate(AppRoutes.MAIN) { popUpTo(AppRoutes.INITIAL) { inclusive = true } }
+                    } else {
+                        Toast.makeText(context, "Preencha o nome e a carteira!", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                enabled = agreedToPrivacy && agreedToTerms
+            ) { Text("Entrar") }
         }
     }
 }
@@ -220,51 +254,46 @@ fun MiningScreenContent(navController: NavController) {
     val userProfile = loadUserProfile(context)
     var gameState by remember { mutableStateOf(loadGameState(context)) }
     var currentTime by remember { mutableStateOf(System.currentTimeMillis()) }
-    
-    // This is the main state machine for the game timers
+
     LaunchedEffect(Unit) {
-        var internalNuggetCounter = 0
         while (isActive) {
-            delay(1000) // Tick every second
             val now = System.currentTimeMillis()
-            var currentState = gameState
+            val currentState = gameState
+            var tempGameState = currentState
 
-            if (currentState.isMining()) {
-                // 1. Decrease mining time
-                val newTime = (currentState.miningTimeRemainingMs - 1000).coerceAtLeast(0)
-                currentState = currentState.copy(miningTimeRemainingMs = newTime)
-
-                // 2. Handle nugget gain every 20 seconds
-                internalNuggetCounter++
-                if (internalNuggetCounter >= NUGGET_GAIN_INTERVAL_SECONDS) {
+            val isMiningNow = currentState.miningTimeRemainingMs > 0
+            val isCooldownNow = !isMiningNow && currentState.cooldownStartedAt > 0 && (now - currentState.cooldownStartedAt < COOLDOWN_DURATION_MS)
+            
+            if (isMiningNow) {
+                val elapsed = now - currentTime
+                if (elapsed >= 20000) { // Check if 20 seconds have passed for nugget gain
                     val nuggetsPerCycle = when {
                         currentState.upgrades.contains("upgrade_cart") -> 3L
                         currentState.upgrades.contains("upgrade_pickaxe") -> 2L
                         else -> 1L
                     }
                     val newNuggets = currentState.nuggets + nuggetsPerCycle
-                    currentState = currentState.copy(nuggets = newNuggets)
-                    internalNuggetCounter = 0 // Reset counter
+                    tempGameState = tempGameState.copy(nuggets = newNuggets)
                 }
 
-                // 3. Check for transition to cooldown
-                if (newTime <= 0) {
-                    currentState = currentState.copy(cooldownStartedAt = now)
+                val newTime = (currentState.miningTimeRemainingMs - elapsed).coerceAtLeast(0)
+                var newCooldown = currentState.cooldownStartedAt
+                if (newTime <= 0) { // Mining just finished
+                    newCooldown = now
                 }
-            } else {
-                // 4. Check if cooldown is over
-                val isCooldownNow = currentState.cooldownStartedAt > 0 && (now - currentState.cooldownStartedAt < COOLDOWN_DURATION_MS)
-                if (isCooldownNow && (now - currentState.cooldownStartedAt >= COOLDOWN_DURATION_MS)) {
-                    currentState = currentState.copy(cooldownStartedAt = 0L)
+                tempGameState = tempGameState.copy(miningTimeRemainingMs = newTime, cooldownStartedAt = newCooldown)
+            } else if (isCooldownNow) {
+                if (now - tempGameState.cooldownStartedAt >= COOLDOWN_DURATION_MS) { // Cooldown just finished
+                    tempGameState = tempGameState.copy(cooldownStartedAt = 0L)
                 }
             }
 
-            // 5. Save state if it has changed
-            if (currentState != gameState) {
-                saveGameState(context, currentState)
-                gameState = currentState
+            if (tempGameState != currentState) {
+                 saveGameState(context, tempGameState)
+                 gameState = tempGameState
             }
             currentTime = now
+            delay(1000) 
         }
     }
 
