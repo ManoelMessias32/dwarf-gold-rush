@@ -1,0 +1,629 @@
+package com.example.dwarfgoldrush
+
+import android.app.Activity
+import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.LoadAdError
+import com.google.android.gms.ads.rewarded.RewardedAd
+import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseAuthWeakPasswordException
+import com.google.firebase.auth.ktx.auth
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.MutableData
+import com.google.firebase.database.Transaction
+import com.google.firebase.database.ValueEventListener
+import com.google.firebase.database.ktx.database
+import com.google.firebase.database.ktx.getValue
+import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.ktx.Firebase
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import kotlin.random.Random
+
+// --- Constants ---
+private const val TERMS_OF_SERVICE_URL = "https://example.com/terms"
+private const val PRIVACY_POLICY_URL = "https://example.com/privacy"
+private const val YOUR_REWARDED_AD_UNIT_ID = "ca-app-pub-1262202142447431/7738751536"
+private const val NUGGETS_GOAL = 10000L
+private const val NUGGET_GAIN_INTERVAL_MS = 25_000L // 25 seconds
+private const val MINING_TIME_PER_AD_MS = 36 * 60 * 1000L // 36 minutes
+private const val AD_WATCH_LIMIT = 20
+private const val AD_COOLDOWN_DURATION_MS = 4 * 60 * 60 * 1000L // 4 hours
+
+// --- Data Classes ---
+data class GameState(
+    val nuggets: Long = 0L,
+    val accumulatedMiningTimeMs: Long = 0L,
+    val activeMiningStartTime: Long = 0L, // Timestamp of when active mining started
+    val lastNuggetMineTime: Long = 0L, // Timestamp of the last time a nugget was mined
+    val adCooldownStartedAt: Long = 0L,
+    val adsWatchedInCycle: Int = 0,
+    val upgrades: Map<String, Int> = emptyMap(), // e.g., {"pickaxe_tier": 2}
+    val activeBoosts: Map<String, Long> = emptyMap() // e.g., {"nugget_boost_end_time": 123456L}
+)
+
+data class UserProfile(
+    val name: String = "",
+    val walletAddress: String = ""
+)
+
+sealed class StoreItem(
+    open val id: String,
+    open val name: String,
+    open val description: String,
+    open val cost: Long
+) {
+    data class Upgrade(
+        override val id: String,
+        override val name: String,
+        override val description: String,
+        override val cost: Long,
+        val tier: Int
+    ) : StoreItem(id, name, description, cost)
+
+    data class Boost(
+        override val id: String,
+        override val name: String,
+        override val description: String,
+        override val cost: Long,
+        val durationMs: Long
+    ) : StoreItem(id, name, description, cost)
+
+     data class InstantReward(
+        override val id: String,
+        override val name: String,
+        override val description: String,
+        override val cost: Long,
+        val minReward: Long,
+        val maxReward: Long
+    ) : StoreItem(id, name, description, cost)
+}
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            DwarfGoldRushTheme {
+                AppNavigation()
+            }
+        }
+    }
+}
+
+// --- Navigation ---
+@Composable
+fun AppNavigation() {
+    val navController = rememberNavController()
+    NavHost(navController = navController, startDestination = "login") {
+        composable("login") { LoginScreen(navController) }
+        composable("main") { MainScreen() }
+    }
+}
+
+// --- Screens ---
+@Composable
+fun ScreenWithBackground(content: @Composable BoxScope.() -> Unit) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Image(painter = painterResource(id = R.drawable.tela_inicial), contentDescription = "Background", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        content()
+    }
+}
+
+@Composable
+fun InfoBox(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Surface(modifier = modifier, color = Color.Black.copy(alpha = 0.6f), shape = MaterialTheme.shapes.medium) {
+        Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, content = content)
+    }
+}
+
+@Composable
+fun LoginScreen(navController: NavHostController) {
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var wallet by remember { mutableStateOf("") }
+    var isRegistering by remember { mutableStateOf(false) }
+    var termsAccepted by remember { mutableStateOf(false) }
+    var privacyPolicyAccepted by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val auth = Firebase.auth
+    val uriHandler = LocalUriHandler.current
+
+    val onAuthSuccess = { navController.navigate("main") { popUpTo("login") { inclusive = true } } }
+
+    LaunchedEffect(Unit) { if (auth.currentUser != null) { onAuthSuccess() } }
+
+    ScreenWithBackground {
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            val title = if (isRegistering) "Criar Conta" else "Login"
+            Text(title, style = MaterialTheme.typography.headlineLarge, color = Color.White)
+            Spacer(modifier = Modifier.height(24.dp))
+
+            TextField(value = email, onValueChange = { email = it }, label = { Text("E-mail") })
+            Spacer(modifier = Modifier.height(8.dp))
+            TextField(value = password, onValueChange = { password = it }, label = { Text("Senha") }, visualTransformation = PasswordVisualTransformation())
+
+            if (isRegistering) {
+                Spacer(modifier = Modifier.height(8.dp))
+                TextField(value = name, onValueChange = { name = it }, label = { Text("Nome de Usuário") })
+                Spacer(modifier = Modifier.height(8.dp))
+                TextField(value = wallet, onValueChange = { wallet = it }, label = { Text("Endereço da Carteira (BEP-20)") })
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = termsAccepted, onCheckedChange = { termsAccepted = it })
+                    Spacer(modifier = Modifier.width(8.dp))
+                    ClickableText(text = AnnotatedString("Eu li e aceito os Termos de Serviço"), style = TextStyle(color = Color.White, textDecoration = TextDecoration.Underline), onClick = { uriHandler.openUri(TERMS_OF_SERVICE_URL) })
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = privacyPolicyAccepted, onCheckedChange = { privacyPolicyAccepted = it })
+                    Spacer(modifier = Modifier.width(8.dp))
+                    ClickableText(text = AnnotatedString("Eu li e aceito a Política de Privacidade"), style = TextStyle(color = Color.White, textDecoration = TextDecoration.Underline), onClick = { uriHandler.openUri(PRIVACY_POLICY_URL) })
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            val isButtonEnabled = if (isRegistering) email.isNotBlank() && password.isNotBlank() && name.isNotBlank() && wallet.isNotBlank() && termsAccepted && privacyPolicyAccepted else email.isNotBlank() && password.isNotBlank()
+
+            if (isRegistering) {
+                Button(onClick = {
+                    auth.createUserWithEmailAndPassword(email, password).addOnCompleteListener { task ->
+                        if (task.isSuccessful) {
+                            val userId = task.result?.user?.uid
+                            if (userId != null) {
+                                val firestoreDb = Firebase.firestore
+                                val realtimeDb = Firebase.database.reference
+                                val userProfile = UserProfile(name, wallet)
+                                val initialGameState = GameState(lastNuggetMineTime = System.currentTimeMillis())
+                                firestoreDb.collection("users").document(userId).set(userProfile)
+                                realtimeDb.child("gamestates").child(userId).setValue(initialGameState)
+                                onAuthSuccess()
+                            }
+                        } else {
+                            val message = when (task.exception) {
+                                is FirebaseAuthUserCollisionException -> "Este e-mail já está em uso."
+                                is FirebaseAuthWeakPasswordException -> "A senha é muito fraca. Use pelo menos 6 caracteres."
+                                else -> "Falha ao criar conta: ${task.exception?.message}"
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }, enabled = isButtonEnabled, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.White)) { Text("Confirmar Criação") }
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = { isRegistering = false }) { Text("Já tem uma conta? Fazer Login", fontSize = 16.sp, color = Color.White, fontWeight = FontWeight.Bold) }
+            } else {
+                Button(onClick = {
+                    auth.signInWithEmailAndPassword(email, password).addOnCompleteListener { task ->
+                        if (task.isSuccessful) onAuthSuccess() else Toast.makeText(context, "Falha no login. Verifique seu e-mail e senha.", Toast.LENGTH_LONG).show()
+                    }
+                 }, enabled = isButtonEnabled, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.White)) { Text("Login") }
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = { isRegistering = true }) { Text("Não tem uma conta? Criar Agora", fontSize = 16.sp, color = Color.White, fontWeight = FontWeight.Bold) }
+                Spacer(modifier = Modifier.height(8.dp))
+                TextButton(onClick = {
+                    if (email.isNotBlank()) {
+                        auth.sendPasswordResetEmail(email).addOnCompleteListener { task ->
+                            val message = if (task.isSuccessful) "E-mail de redefinição de senha enviado para $email." else "Falha ao enviar e-mail: ${task.exception?.message}"
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        Toast.makeText(context, "Por favor, insira seu e-mail.", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Esqueceu a senha?", fontSize = 16.sp, color = Color.White, fontWeight = FontWeight.Bold) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MainScreen() {
+    val pagerState = rememberPagerState(pageCount = { 3 })
+    val coroutineScope = rememberCoroutineScope()
+    val titles = listOf("Mineração", "Loja", "Regras")
+
+    ScreenWithBackground {
+        Column {
+            TabRow(selectedTabIndex = pagerState.currentPage) {
+                titles.forEachIndexed { index, title ->
+                    Tab(selected = pagerState.currentPage == index, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(index) } }, text = { Text(text = title) })
+                }
+            }
+            HorizontalPager(state = pagerState) { page ->
+                when (page) {
+                    0 -> MiningScreenContent()
+                    1 -> StoreScreenContent()
+                    2 -> RulesScreenContent()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MiningScreenContent() {
+    val userId = Firebase.auth.currentUser?.uid ?: return
+    val firestoreDb = Firebase.firestore
+    val realtimeDb = Firebase.database.reference.child("gamestates").child(userId)
+
+    var gameState by remember { mutableStateOf(GameState()) }
+    var userProfile by remember { mutableStateOf(UserProfile()) }
+    var displayedTime by remember { mutableLongStateOf(0L) }
+
+    DisposableEffect(userId) {
+        val userListener = firestoreDb.collection("users").document(userId).addSnapshotListener { snapshot, _ ->
+            snapshot?.toObject(UserProfile::class.java)?.let { userProfile = it }
+        }
+
+        val gameStateListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val dbState = snapshot.getValue<GameState>() ?: return
+                val now = System.currentTimeMillis()
+
+                if (dbState.isMiningActive()) {
+                    val timeSinceLastMine = now - dbState.lastNuggetMineTime
+                    val activeTimeSoFar = now - dbState.activeMiningStartTime
+                    val totalMiningDuration = dbState.accumulatedMiningTimeMs
+
+                    if (activeTimeSoFar < totalMiningDuration) {
+                        val nuggetsGained = (timeSinceLastMine / NUGGET_GAIN_INTERVAL_MS) * dbState.getNuggetsPerCycle()
+                        if (nuggetsGained > 0) {
+                            realtimeDb.runTransaction(object : Transaction.Handler {
+                                override fun doTransaction(currentData: MutableData): Transaction.Result {
+                                    val currentState = currentData.getValue<GameState>() ?: return Transaction.abort()
+                                    val updatedState = currentState.copy(
+                                        nuggets = currentState.nuggets + nuggetsGained,
+                                        lastNuggetMineTime = now
+                                    )
+                                    currentData.value = updatedState
+                                    return Transaction.success(currentData)
+                                }
+                                override fun onComplete(error: DatabaseError?, committed: Boolean, currentData: DataSnapshot?) {
+                                    // Transaction completed
+                                }
+                            })
+                        }
+                    }
+                }
+                gameState = dbState
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.e("Firebase", "Erro ao ler dados: ${error.message}")
+            }
+        }
+
+        realtimeDb.addValueEventListener(gameStateListener)
+
+        onDispose {
+            userListener.remove()
+            realtimeDb.removeEventListener(gameStateListener)
+        }
+    }
+
+    LaunchedEffect(gameState) {
+        val now = System.currentTimeMillis()
+        displayedTime = if (gameState.isMiningActive()) gameState.getActiveMiningTimeLeft(now) else gameState.accumulatedMiningTimeMs
+        if (gameState.isMiningActive()) {
+            while (isActive && displayedTime > 0) {
+                delay(1000)
+                val current = System.currentTimeMillis()
+                displayedTime = gameState.getActiveMiningTimeLeft(current)
+            }
+        }
+    }
+
+    val context = LocalContext.current
+    val activity = context as? Activity
+    val isAdOnCooldown = gameState.adCooldownStartedAt > 0 && System.currentTimeMillis() - gameState.adCooldownStartedAt < AD_COOLDOWN_DURATION_MS
+    val canStartMining = gameState.accumulatedMiningTimeMs > 0 && !gameState.isMiningActive()
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally) {
+        InfoBox(modifier = Modifier.fillMaxWidth()) {
+            Text(userProfile.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(formatWalletAddress(userProfile.walletAddress), color = Color.Gray, fontSize = 14.sp)
+        }
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            InfoBox {
+                Text("Nuggets: ${gameState.nuggets}", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(progress = { (gameState.nuggets.toFloat() / NUGGETS_GOAL.toFloat()).coerceIn(0f, 1f) }, modifier = Modifier.height(8.dp).fillMaxWidth(0.8f))
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            if (canStartMining) {
+                Button(onClick = {
+                    realtimeDb.updateChildren(mapOf("activeMiningStartTime" to System.currentTimeMillis(), "lastNuggetMineTime" to System.currentTimeMillis()))
+                }) { Text("Iniciar Mineração") }
+            }
+        }
+
+        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+            Text("Anúncios vistos: ${gameState.adsWatchedInCycle}/${AD_WATCH_LIMIT}", color = Color.White)
+            Spacer(modifier = Modifier.height(4.dp))
+            Button(onClick = {
+                if (activity != null) {
+                    loadRewardedAd(activity,
+                        onAdLoaded = { rewardedAd ->
+                            rewardedAd.show(activity) {
+                                if (isAdOnCooldown) {
+                                    Toast.makeText(context, "Período de espera. Você pode ver anúncios, mas não ganhará tempo agora.", Toast.LENGTH_LONG).show()
+                                } else {
+                                    realtimeDb.runTransaction(object : Transaction.Handler {
+                                        override fun doTransaction(currentData: MutableData): Transaction.Result {
+                                            val currentState = currentData.getValue<GameState>() ?: return Transaction.success(currentData)
+
+                                            val newAdsWatched = currentState.adsWatchedInCycle + 1
+                                            val newAdCooldownStartedAt = if (newAdsWatched >= AD_WATCH_LIMIT) System.currentTimeMillis() else currentState.adCooldownStartedAt
+                                            val newTime = currentState.accumulatedMiningTimeMs + MINING_TIME_PER_AD_MS
+                                            
+                                            val updatedState = currentState.copy(
+                                                accumulatedMiningTimeMs = newTime,
+                                                adsWatchedInCycle = newAdsWatched,
+                                                adCooldownStartedAt = newAdCooldownStartedAt
+                                            )
+                                            currentData.value = updatedState
+                                            return Transaction.success(currentData)
+                                        }
+
+                                        override fun onComplete(error: DatabaseError?, committed: Boolean, currentData: DataSnapshot?) {
+                                            if (committed) {
+                                                Toast.makeText(context, "+36 minutos de tempo de mineração acumulado!", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    })
+                                }
+                            }
+                        },
+                        onAdFailed = { error ->
+                            Log.e("MiningScreenContent", "Ad failed to load: Code ${error.code} - ${error.message}")
+                            Toast.makeText(context, "Anúncio não disponível no momento. Tente mais tarde.", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                }
+            }) { Text("Ver Anúncio") }
+
+            if (isAdOnCooldown) {
+                val remaining = AD_COOLDOWN_DURATION_MS - (System.currentTimeMillis() - gameState.adCooldownStartedAt)
+                Text("Tempo para recompensas:", color = Color.Yellow, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp))
+                Text(formatDuration(remaining), color = Color.White, fontSize = 12.sp)
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            val progressBarProgress = if (gameState.isMiningActive()) displayedTime.toFloat() / gameState.accumulatedMiningTimeMs.toFloat() else displayedTime.toFloat() / (AD_WATCH_LIMIT * MINING_TIME_PER_AD_MS).toFloat()
+            Text(if (gameState.isMiningActive()) "Tempo de Mineração" else "Tempo Acumulado", color = Color.White)
+            LinearProgressIndicator(progress = { progressBarProgress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth(0.7f))
+            Text(formatDuration(displayedTime), color = Color.White, modifier = Modifier.align(Alignment.End))
+        }
+    }
+}
+
+@Composable
+fun StoreScreenContent() {
+    val userId = Firebase.auth.currentUser?.uid ?: return
+    val realtimeDb = Firebase.database.reference.child("gamestates").child(userId)
+    val context = LocalContext.current
+
+    var gameState by remember { mutableStateOf(GameState()) }
+
+    DisposableEffect(userId) {
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                snapshot.getValue<GameState>()?.let { gameState = it }
+            }
+            override fun onCancelled(error: DatabaseError) { Log.e("StoreScreen", "DB error: ${error.message}") }
+        }
+        realtimeDb.addValueEventListener(listener)
+        onDispose { realtimeDb.removeEventListener(listener) }
+    }
+
+    val storeItems = remember {
+        listOf(
+            StoreItem.Upgrade("pickaxe_tier_1", "Picareta de Ferro", "Gera 2 nuggets por ciclo.", 500, 1),
+            StoreItem.Upgrade("pickaxe_tier_2", "Picareta de Ouro", "Gera 4 nuggets por ciclo.", 2500, 2),
+            StoreItem.Upgrade("pickaxe_tier_3", "Picareta de Diamante", "Gera 8 nuggets por ciclo.", 10000, 3),
+            StoreItem.Boost("nugget_boost", "Cerveja de Anão", "Dobra a produção de nuggets por 1 hora.", 200, 3600000L),
+            StoreItem.InstantReward("treasure_map", "Mapa do Tesouro", "Recompensa instantânea de 1000-3000 nuggets.", 1500, 1000, 3000)
+        )
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
+        Text("Loja de Melhorias", style = MaterialTheme.typography.headlineMedium, color = Color.White)
+        Text("Seus Nuggets: ${gameState.nuggets}", color = Color.White)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        storeItems.forEach { item ->
+            val currentTier = gameState.upgrades["pickaxe_tier"] ?: 0
+            val isPurchasable = when (item) {
+                is StoreItem.Upgrade -> gameState.nuggets >= item.cost && item.tier == currentTier + 1
+                is StoreItem.Boost -> gameState.nuggets >= item.cost && !(gameState.activeBoosts.containsKey(item.id) && gameState.activeBoosts[item.id]!! > System.currentTimeMillis())
+                is StoreItem.InstantReward -> gameState.nuggets >= item.cost
+            }
+            val buttonText = when (item) {
+                is StoreItem.Upgrade -> if (item.tier <= currentTier) "Adquirido" else "Comprar"
+                is StoreItem.Boost -> if (gameState.activeBoosts.containsKey(item.id) && gameState.activeBoosts[item.id]!! > System.currentTimeMillis()) "Ativo" else "Comprar"
+                is StoreItem.InstantReward -> "Comprar"
+            }
+
+            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(item.name, style = MaterialTheme.typography.titleMedium)
+                        Text(item.description, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
+                        Text("Custo: ${item.cost} nuggets", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                    }
+                    Button(onClick = {
+                        if (isPurchasable) {
+                            realtimeDb.runTransaction(object : Transaction.Handler {
+                                override fun doTransaction(currentData: MutableData): Transaction.Result {
+                                    val currentState = currentData.getValue<GameState>() ?: return Transaction.success(currentData)
+
+                                    if (currentState.nuggets < item.cost) return Transaction.abort()
+
+                                    var newNuggets = currentState.nuggets - item.cost
+                                    var newUpgrades = currentState.upgrades
+                                    var newActiveBoosts = currentState.activeBoosts
+
+                                    when (item) {
+                                        is StoreItem.Upgrade -> {
+                                            newUpgrades = newUpgrades + ("pickaxe_tier" to item.tier)
+                                            // Salva upgrade no Firebase
+                                            userRef.child("upgrades").child("pickaxe_tier").setValue(item.tier)
+                                        }
+
+                                        is StoreItem.Boost -> {
+                                            val endTime = System.currentTimeMillis() + item.durationMs
+                                            newActiveBoosts = newActiveBoosts + (item.id to endTime)
+                                            // Salva boost no Firebase
+                                            userRef.child("boosts").child(item.id).setValue(endTime)
+                                        }
+
+                                        is StoreItem.InstantReward -> {
+                                            val reward = Random.nextLong(item.minReward, item.maxReward + 1)
+                                            newNuggets += reward
+
+                                            // ATUALIZA NO FIREBASE
+                                            userRef.child("nuggets").get().addOnSuccessListener { snapshot ->
+                                                val current = snapshot.getValue(Long::class.java) ?: 0L
+                                                userRef.child("nuggets").setValue(current + reward)
+                                            }
+
+                                            // TOAST SEGURO (sem activity)
+                                            MainScope().launch {
+                                                Toast.makeText(context, "Você encontrou $reward nuggets!", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                        }
+                                    }
+                                    val updatedState = currentState.copy(nuggets = newNuggets, upgrades = newUpgrades, activeBoosts = newActiveBoosts)
+                                    currentData.value = updatedState
+                                    return Transaction.success(currentData)
+                                }
+                                override fun onComplete(error: DatabaseError?, committed: Boolean, currentData: DataSnapshot?) {}
+                            })
+                        }
+                    }, enabled = isPurchasable) { Text(buttonText) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RulesScreenContent() {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        InfoBox {
+            Text("REGRAS DO DWARF GOLD RUSH", style = MaterialTheme.typography.headlineMedium, color = Color.White, textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(24.dp))
+            Text("• cada inscrito pela sua referencia ganha 1 ecopacto", color = Color.White, textAlign = TextAlign.Center)
+            Text("• login diario para cada escrito na sua referencia ganhe 2 ecopacto por mes com recompensa de fidelidade", color = Color.White, textAlign = TextAlign.Center)
+            Text("• bsc testnet", color = Color.White, textAlign = TextAlign.Center)
+            Text("• RPC URL: https://data-seed-prebsc-1-s1.bnbchain.org:8545", color = Color.White, textAlign = TextAlign.Center)
+            Text("• ChainID: 97", color = Color.White, textAlign = TextAlign.Center)
+            Text("• Symbol: tBNB", color = Color.White, textAlign = TextAlign.Center)
+            Text("• Explorer: https://testnet.bscscan.com/", color = Color.White, textAlign = TextAlign.Center)
+            Text("• ecopacto contrato ( dec 18) 0x3a713ad93a08AE1A7331b2Be5c1DaAD3f2Bf732e", color = Color.White, textAlign = TextAlign.Center)
+            Text("• previsao para lançamento do ecopacto ( ainda sem data definida )", color = Color.White, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+// --- Helper Functions ---
+fun GameState.isMiningActive(): Boolean = this.activeMiningStartTime > 0 && this.getActiveMiningTimeLeft(System.currentTimeMillis()) > 0
+fun GameState.getActiveMiningTimeLeft(currentTime: Long): Long = (this.accumulatedMiningTimeMs - (currentTime - this.activeMiningStartTime)).coerceAtLeast(0)
+fun GameState.getNuggetsPerCycle(): Int {
+    val pickaxeTier = this.upgrades["pickaxe_tier"] ?: 0
+    var cycleNuggets = when (pickaxeTier) {
+        1 -> 2
+        2 -> 4
+        3 -> 8
+        else -> 1
+    }
+    if (this.activeBoosts.containsKey("nugget_boost") && this.activeBoosts["nugget_boost"]!! > System.currentTimeMillis()) {
+        cycleNuggets *= 2
+    }
+    return cycleNuggets
+}
+
+fun formatDuration(millis: Long): String {
+    val hours = TimeUnit.MILLISECONDS.toHours(millis)
+    val minutes = TimeUnit.MILLISECONDS.toMinutes(millis) % 60
+    val seconds = TimeUnit.MILLISECONDS.toSeconds(millis) % 60
+    return String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+}
+
+fun formatWalletAddress(address: String): String {
+    if (address.length < 11) return address
+    return "${address.take(6)}...${address.takeLast(4)}"
+}
+
+fun loadRewardedAd(activity: Activity, onAdLoaded: (RewardedAd) -> Unit, onAdFailed: (LoadAdError) -> Unit) {
+    val adRequest = AdRequest.Builder().build()
+    RewardedAd.load(activity, YOUR_REWARDED_AD_UNIT_ID, adRequest, object : RewardedAdLoadCallback() {
+        override fun onAdFailedToLoad(adError: LoadAdError) { onAdFailed(adError) }
+        override fun onAdLoaded(rewardedAd: RewardedAd) { onAdLoaded(rewardedAd) }
+    })
+}
+
+@Composable
+fun DwarfGoldRushTheme(content: @Composable () -> Unit) {
+    MaterialTheme(content = content)
+}
+
+// --- Previews ---
+@Preview(showBackground = true)
+@Composable
+fun LoginScreenPreview() {
+    DwarfGoldRushTheme { LoginScreen(rememberNavController()) }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun MiningScreenPreview() {
+    DwarfGoldRushTheme { MainScreen() }
+}
